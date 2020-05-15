@@ -51,6 +51,10 @@
 #define WC_BATCH (10)
 #define _GNU_SOURCE
 
+// throughput phase
+unsigned long EXP_SIZES[] = {1, 2, 4, 8, 16, 32, 64, 128, 256, 512, 1024, 2048, 4096, 8192, 16384, 32768, 65536,
+                             131072, 262144, 524288, 1048576};
+
 enum {
     PINGPONG_RECV_WRID = 1,
     PINGPONG_SEND_WRID = 2,
@@ -58,19 +62,7 @@ enum {
 
 static int page_size;
 
-//struct pingpong_context {
-//    struct ibv_context	*context;
-//    struct ibv_comp_channel *channel;
-//    struct ibv_pd		*pd;
-//    struct ibv_mr		*mr;
-//    struct ibv_cq		*cq;
-//    struct ibv_qp		*qp;
-//    void			*buf;
-//    int			 size;
-//    int			 rx_depth;
-//    int			 pending;
-//    struct ibv_port_attr     portinfo;
-//};
+
 struct pingpong_context {
     struct ibv_context *context;
     struct ibv_comp_channel *channel;
@@ -82,6 +74,7 @@ struct pingpong_context {
     int size;
     int rx_depth;
     int routs;
+    int pending;
     struct ibv_port_attr portinfo;
 };
 
@@ -635,6 +628,8 @@ int main(int argc, char *argv[]) {
     int sl = 0;
     int gidx = -1;
     char gid[33];
+    int rcnt, scnt;
+    int num_cq_events = 0;
 
     srand48(getpid() * time(NULL));
 
@@ -811,31 +806,125 @@ int main(int argc, char *argv[]) {
         if (pp_connect_ctx(ctx, ib_port, my_dest.psn, mtu, sl, rem_dest, gidx))
             return 1;
 
-    if (servername) { //client code
-        int i;
-        for (i = 0; i < iters; i++) {
-            if ((i != 0) && (i % tx_depth == 0)) {
-                pp_wait_completions(ctx, tx_depth);
-            }
-            if (pp_post_send(ctx)) {
-                fprintf(stderr, "Client couldn't post send\n");
-                return 1;
-            }
-        }
-        printf("Client Done.\n");
-    } else { // server code
+    ctx->pending = PINGPONG_RECV_WRID; //2 bits that says if i am waiting to recv or send
+
+    if (servername) { // client code
         if (pp_post_send(ctx)) {
-            fprintf(stderr, "Server couldn't post send\n");
+            fprintf(stderr, "Couldn't post send\n");
             return 1;
         }
-        pp_wait_completions(ctx, iters);
-        printf("Server Done.\n");
+        ctx->pending |= PINGPONG_SEND_WRID;
     }
+    struct timeval start, end;
+    if (gettimeofday(&start, NULL)) {
+        perror("gettimeofday");
+        return 1;
+    }
+    for (int k = 0; k < 20; k++)
+    {
+    rcnt = scnt = 0; //recv count , send count
+    while (rcnt < iters || scnt < iters) { // while we have something to send or to receive
+        {
+//            struct ibv_wc is defined as follows:
+//            struct ibv_wc
+//            {
+//                uint64_t wr_id;
+//                enum ibv_wc_status status;
+//                enum ibv_wc_opcode opcode;
+//                uint32_t vendor_err;
+//                uint32_t byte_len;
+//                uint32_t imm_data;/* network byte order */
+//                uint32_t qp_num;
+//                uint32_t src_qp;
+//                enum ibv_wc_flags wc_flags;
+//                uint16_t pkey_index;
+//                uint16_t slid;
+//                uint8_t sl;
+//                uint8_t dlid_path_bits;
+
+            struct ibv_wc wc[2]; //array of 2 ibv_wc
+            int ne, i;
+
+            do {
+                ne = ibv_poll_cq(ctx->cq, 2, wc);
+                if (ne < 0) {
+                    fprintf(stderr, "poll CQ failed %d\n", ne);
+                    return 1;
+                }
+
+            } while (!use_event && ne < 1);
+
+            for (i = 0; i < ne; ++i) {
+                if (wc[i].status != IBV_WC_SUCCESS) {
+                    fprintf(stderr, "Failed status %s (%d) for wr_id %d\n",
+                            ibv_wc_status_str(wc[i].status),
+                            wc[i].status, (int) wc[i].wr_id);
+                    return 1;
+                }
+
+                switch ((int) wc[i].wr_id) {
+                    case PINGPONG_SEND_WRID:
+                        ++scnt;
+                        break;
+
+                    case PINGPONG_RECV_WRID:
+                        if (--ctx->routs <= 1) {
+                            ctx->routs += pp_post_recv(ctx, ctx->rx_depth - ctx->routs);
+                            if (ctx->routs < ctx->rx_depth) {
+                                fprintf(stderr,
+                                        "Couldn't post receive (%d)\n",
+                                        ctx->routs);
+                                return 1;
+                            }
+                        }
+
+                        ++rcnt;
+                        break;
+
+                    default:
+                        fprintf(stderr, "Completion for unknown wr_id %d\n",
+                                (int) wc[i].wr_id);
+                        return 1;
+                }
+
+                ctx->pending &= ~(int) wc[i].wr_id;
+                if (scnt < iters && !ctx->pending) {
+                    if (pp_post_send(ctx)) {
+                        fprintf(stderr, "Couldn't post send\n");
+                        return 1;
+                    }
+                    ctx->pending = PINGPONG_RECV_WRID |
+                                   PINGPONG_SEND_WRID;
+                }
+            }
+        }
+    }
+        if (gettimeofday(&end, NULL)) {
+            perror("gettimeofday");
+            return 1;
+        }
+
+        {
+            float usec = (end.tv_sec - start.tv_sec) * 1000000 +
+                         (end.tv_usec - start.tv_usec);
+            long long bytes = (long long) ctx->size * iters * 2;
+
+            printf("%lld bytes in %.2f micro seconds = %.2f Mbit/sec\n",
+                   bytes, usec, bytes * 8. / usec);
+            printf("%d iters in %.2f micro seconds = %.2f usec/iter\n",
+                   iters, usec, usec / iters);
+            fflush(stdout);
+        }
+        ibv_ack_cq_events(ctx->cq, num_cq_events);
+        ctx->size *= 2;
+
+    }
+    if (pp_close_ctx(ctx))
+        return 1;
+
 
     ibv_free_device_list(dev_list);
     free(rem_dest);
+
     return 0;
 }
-
-
-// blabla testssadfasdfasdfasdfsdf Mor

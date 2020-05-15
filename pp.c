@@ -722,9 +722,9 @@ int main(int argc, char *argv[])
         if (pp_connect_ctx(ctx, ib_port, my_dest.psn, mtu, sl, rem_dest, gidx))
             return 1;
 
-    ctx->pending = PINGPONG_RECV_WRID;
+    ctx->pending = PINGPONG_RECV_WRID; //2 bits that says if i am waiting to recv or send
 
-    if (servername) {
+    if (servername) { // client code
         if (pp_post_send(ctx)) {
             fprintf(stderr, "Couldn't post send\n");
             return 1;
@@ -737,32 +737,49 @@ int main(int argc, char *argv[])
         return 1;
     }
 
-    rcnt = scnt = 0;
-    while (rcnt < iters || scnt < iters) {
-        if (use_event) {
-            struct ibv_cq *ev_cq;
-            void          *ev_ctx;
-
-            if (ibv_get_cq_event(ctx->channel, &ev_cq, &ev_ctx)) {
-                fprintf(stderr, "Failed to get cq_event\n");
-                return 1;
-            }
-
-            ++num_cq_events;
-
-            if (ev_cq != ctx->cq) {
-                fprintf(stderr, "CQ event for unknown CQ %p\n", ev_cq);
-                return 1;
-            }
-
-            if (ibv_req_notify_cq(ctx->cq, 0)) {
-                fprintf(stderr, "Couldn't request CQ notification\n");
-                return 1;
-            }
-        }
-
+    rcnt = scnt = 0; //recv count , send count
+    while (rcnt < iters || scnt < iters) { // while we have something to send or to receive
+//        if (use_event) {
+//            struct ibv_cq *ev_cq;
+//            void          *ev_ctx;
+//
+//            if (ibv_get_cq_event(ctx->channel, &ev_cq, &ev_ctx)) {
+//                fprintf(stderr, "Failed to get cq_event\n");
+//                return 1;
+//            }
+//
+//            ++num_cq_events;
+//
+//            if (ev_cq != ctx->cq) {
+//                fprintf(stderr, "CQ event for unknown CQ %p\n", ev_cq);
+//                return 1;
+//            }
+//
+//            if (ibv_req_notify_cq(ctx->cq, 0)) {
+//                fprintf(stderr, "Couldn't request CQ notification\n");
+//                return 1;
+//            }
+//        }
+        // running always
         {
-            struct ibv_wc wc[2];
+//            struct ibv_wc is defined as follows:
+//            struct ibv_wc
+//            {
+//                uint64_t wr_id;
+//                enum ibv_wc_status status;
+//                enum ibv_wc_opcode opcode;
+//                uint32_t vendor_err;
+//                uint32_t byte_len;
+//                uint32_t imm_data;/* network byte order */
+//                uint32_t qp_num;
+//                uint32_t src_qp;
+//                enum ibv_wc_flags wc_flags;
+//                uint16_t pkey_index;
+//                uint16_t slid;
+//                uint8_t sl;
+//                uint8_t dlid_path_bits;
+
+            struct ibv_wc wc[2]; //array of 2 ibv_wc
             int ne, i;
 
             do {
