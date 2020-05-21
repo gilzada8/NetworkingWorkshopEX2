@@ -367,10 +367,27 @@ static struct pingpong_dest *pp_server_exch_dest(struct pingpong_context *ctx,
 }
 
 #include <sys/param.h>
-
+/*
+ * ibv_device - NIC we are using
+ * size - the size of the message, we can define here 1MB buffer.
+ * rx_depth -
+ *
+ * */
+/**
+ *
+ * @param ib_dev
+ * @param size
+ * @param rx_depth
+ * @param tx_depth
+ * @param port
+ * @param use_event
+ * @param is_server
+ * @return
+ */
 static struct pingpong_context *pp_init_ctx(struct ibv_device *ib_dev, int size,
                                             int rx_depth, int tx_depth, int port,
                                             int use_event, int is_server) {
+
     struct pingpong_context *ctx;
 
     ctx = calloc(1, sizeof *ctx);
@@ -388,7 +405,7 @@ static struct pingpong_context *pp_init_ctx(struct ibv_device *ib_dev, int size,
     }
 
     memset(ctx->buf, 0x7b + is_server, size);
-
+    // lunching the NIC to work with our program
     ctx->context = ibv_open_device(ib_dev);
     if (!ctx->context) {
         fprintf(stderr, "Couldn't get context for %s\n",
@@ -405,12 +422,14 @@ static struct pingpong_context *pp_init_ctx(struct ibv_device *ib_dev, int size,
     } else
         ctx->channel = NULL;
 
+    // create protection domain - to make sure we are showing only relevant data.
     ctx->pd = ibv_alloc_pd(ctx->context);
     if (!ctx->pd) {
         fprintf(stderr, "Couldn't allocate PD\n");
         return NULL;
     }
 
+    // buffer registration
     ctx->mr = ibv_reg_mr(ctx->pd, ctx->buf, size, IBV_ACCESS_LOCAL_WRITE);
     if (!ctx->mr) {
         fprintf(stderr, "Couldn't register MR\n");
@@ -463,7 +482,7 @@ static struct pingpong_context *pp_init_ctx(struct ibv_device *ib_dev, int size,
         }
     }
 
-    return ctx;
+//    return ctx;
 }
 
 int pp_close_ctx(struct pingpong_context *ctx) {
@@ -726,7 +745,7 @@ int main(int argc, char *argv[]) {
     }
 
     page_size = sysconf(_SC_PAGESIZE);
-
+    // ibv_get_device_list - request to use the NIC
     dev_list = ibv_get_device_list(NULL);
     if (!dev_list) {
         perror("Failed to get IB devices list");
@@ -751,7 +770,7 @@ int main(int argc, char *argv[]) {
         }
     }
     /// interesting part
-
+    // init context - save all relevant params
     ctx = pp_init_ctx(ib_dev, size, rx_depth, tx_depth, ib_port, use_event, !servername);
     if (!ctx)
         return 1;
