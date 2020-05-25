@@ -1,6 +1,11 @@
-C:\Users\uriel\.CLion2019.2\system\cygwin_cmake\bin\cmake.exe -DCMAKE_BUILD_TYPE=Debug -G "CodeBlocks - Unix Makefiles" /cygdrive/c/Users/uriel/Desktop/NetworkingWorkshopEX2
-CMake Error at CMakeLists.txt:1 (cmake_minimum_required):
-  CMake 3.16 or higher is required.  You are running version 3.15.3
-
-
--- Configuring incomplete, errors occurred!
+/usr/local/jetbrains/clion/2019.2.1/bin/cmake/linux/bin/cmake -DCMAKE_BUILD_TYPE=Debug -G "CodeBlocks - Unix Makefiles" /cs/usr/l33t/NetworkingWorkshopEX2
+-- The C compiler identification is GNU 8.3.0
+-- Check for working C compiler: /usr/bin/cc
+-- Check for working C compiler: /usr/bin/cc -- works
+-- Detecting C compiler ABI info
+-- Detecting C compiler ABI info - done
+-- Detecting C compile features
+-- Detecting C compile features - done
+-- Configuring done
+-- Generating done
+-- Build files have been written to: /cs/usr/l33t/NetworkingWorkshopEX2/cmake-build-debug

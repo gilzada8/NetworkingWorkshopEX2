@@ -56,7 +56,7 @@ enum {
     PINGPONG_SEND_WRID = 2,
 };
 
-MAX_SIZE = 1048576 // 2 ^ 20
+int MAX_SIZE = 1048576; // 2 ^ 20
 
 static int page_size;
 
@@ -880,15 +880,14 @@ int main(int argc, char *argv[]) {
             }
 
             float usec = (end.tv_sec - start.tv_sec) * 1000000 + (end.tv_usec - start.tv_usec);
-            long long bytes = (long long) ctx->size * iters * 2;
+            long long bytes = (long long) ourSize * iters * 2;
             printf("%lld bytes in %.2f micro seconds = %.2f Mbit/sec\n",
                    bytes, usec, bytes * 8. / usec);
             printf("%d iters in %.2f micro seconds = %.2f usec/iter\n",
                    iters, usec, usec / iters);
             fflush(stdout);
+	    printf("Client Done.\n");
         }
-        // TODO: should we do a specialized "end" message ?
-        printf("Client Done.\n");
         else { // server code
 
 //            for (int k = 0; k < iters ; k++) { // wait for all sended messages
