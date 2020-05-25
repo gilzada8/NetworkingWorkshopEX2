@@ -56,6 +56,8 @@ enum {
     PINGPONG_SEND_WRID = 2,
 };
 
+MAX_SIZE = 1048576 // 2 ^ 20
+
 static int page_size;
 
 //struct pingpong_context {
@@ -79,7 +81,7 @@ struct pingpong_context {
     struct ibv_cq *cq;
     struct ibv_qp *qp;
     void *buf;
-    int size;
+//    int size;
     int rx_depth;
     int routs;
     struct ibv_port_attr portinfo;
@@ -131,7 +133,7 @@ void wire_gid_to_gid(const char *wgid, union ibv_gid *gid) {
     for (tmp[8] = 0, i = 0; i < 4; ++i) {
         memcpy(tmp, wgid + i * 8, 8);
         sscanf(tmp, "%x", &v32);
-        *(uint32_t *) (&gid->raw[i * 4]) = ntohl(v32);
+        *(uint32_t * )(&gid->raw[i * 4]) = ntohl(v32);
     }
 }
 
@@ -139,7 +141,7 @@ void gid_to_wire_gid(const union ibv_gid *gid, char wgid[]) {
     int i;
 
     for (i = 0; i < 4; ++i)
-        sprintf(&wgid[i * 8], "%08x", htonl(*(uint32_t *) (gid->raw + i * 4)));
+        sprintf(&wgid[i * 8], "%08x", htonl(*(uint32_t * )(gid->raw + i * 4)));
 }
 
 static int pp_connect_ctx(struct pingpong_context *ctx, int port, int my_psn,
@@ -394,7 +396,7 @@ static struct pingpong_context *pp_init_ctx(struct ibv_device *ib_dev, int size,
     if (!ctx)
         return NULL;
 
-    ctx->size = size;
+//    ctx->size = size;
     ctx->rx_depth = rx_depth;
     ctx->routs = rx_depth;
 
@@ -524,10 +526,11 @@ int pp_close_ctx(struct pingpong_context *ctx) {
     return 0;
 }
 
-static int pp_post_recv(struct pingpong_context *ctx, int n) {
+static int pp_post_recv(struct pingpong_context *ctx, int n, int ourSize) { //added int ourSize
     struct ibv_sge list = {
             .addr    = (uintptr_t) ctx->buf,
-            .length = ctx->size,
+//            .length = ctx->size,
+            .length = ourSize,
             .lkey    = ctx->mr->lkey
     };
     struct ibv_recv_wr wr = {
@@ -546,10 +549,11 @@ static int pp_post_recv(struct pingpong_context *ctx, int n) {
     return i;
 }
 
-static int pp_post_send(struct pingpong_context *ctx) {
+static int pp_post_send(struct pingpong_context *ctx, int ourSize) { //added int ourSize
     struct ibv_sge list = {
             .addr    = (uint64_t) ctx->buf,
-            .length = ctx->size,
+//            .length = ctx->size,
+            .length = ourSize,
             .lkey    = ctx->mr->lkey
     };
 
@@ -595,7 +599,7 @@ int pp_wait_completions(struct pingpong_context *ctx, int iters) {
 
                 case PINGPONG_RECV_WRID:
                     if (--ctx->routs <= 10) {
-                        ctx->routs += pp_post_recv(ctx, ctx->rx_depth - ctx->routs);
+                        ctx->routs += pp_post_recv(ctx, ctx->rx_depth - ctx->routs, MAX_SIZE); //added MAX_SIZE
                         if (ctx->routs < ctx->rx_depth) {
                             fprintf(stderr,
                                     "Couldn't post receive (%d)\n",
@@ -737,7 +741,7 @@ int main(int argc, char *argv[]) {
         }
     }
 
-    if (optind == argc - 1) 
+    if (optind == argc - 1)
         servername = strdup(argv[optind]);
     else if (optind < argc) {
         usage(argv[0]);
@@ -775,7 +779,7 @@ int main(int argc, char *argv[]) {
     if (!ctx)
         return 1;
 
-    ctx->routs = pp_post_recv(ctx, ctx->rx_depth);
+    ctx->routs = pp_post_recv(ctx, ctx->rx_depth, MAX_SIZE); // changed to MAX_SIZE
     if (ctx->routs < ctx->rx_depth) {
         fprintf(stderr, "Couldn't post receive (%d)\n", ctx->routs);
         return 1;
@@ -830,31 +834,81 @@ int main(int argc, char *argv[]) {
         if (pp_connect_ctx(ctx, ib_port, my_dest.psn, mtu, sl, rem_dest, gidx))
             return 1;
 
-    if (servername) { //client code
-        int i;
-        for (i = 0; i < iters; i++) {
-            if ((i != 0) && (i % tx_depth == 0)) {
-                pp_wait_completions(ctx, tx_depth);
-            }
-            if (pp_post_send(ctx)) {
-                fprintf(stderr, "Client couldn't post send\n");
+    // for every size:
+    //1. init buffer + memset
+    //2. warmup
+    //3. test (on same buffer)
+    int ourSize = 1;
+
+
+    for (int j = 0; j < 21; j++) {
+        if (servername) { //client code
+
+
+            // open timer
+            struct timeval start, end;
+            if (gettimeofday(&start, NULL)) {
+                perror("gettimeofday");
                 return 1;
             }
+
+            int i;
+            for (i = 0; i < tx_depth; i++) { // send first tx_depth messages
+                if (pp_post_send(ctx, ourSize)) { //send
+                    fprintf(stderr, "Client couldn't post send\n");
+                    return 1;
+                }
+            }
+            // TODO: what happens if tx_depth is bigger then iters ?
+            for (i = 0; i < iters - tx_depth; i++) { // wait for 1 and send 1
+//                if ((i != 0) && (i % 1 == 0)) {
+                pp_wait_completions(ctx, 1);
+//                }
+                if (pp_post_send(ctx, ourSize)) { //send
+                    fprintf(stderr, "Client couldn't post send\n");
+                    return 1;
+                }
+            }
+            // get message from server that says : "ended current iter j"
+            pp_post_recv(ctx, 1, MAX_SIZE); //added MAX_SIZE ?
+            pp_wait_completions(ctx, 1);
+
+            // close timer
+            if (gettimeofday(&end, NULL)) {
+                perror("gettimeofday");
+                return 1;
+            }
+
+            float usec = (end.tv_sec - start.tv_sec) * 1000000 + (end.tv_usec - start.tv_usec);
+            long long bytes = (long long) ctx->size * iters * 2;
+            printf("%lld bytes in %.2f micro seconds = %.2f Mbit/sec\n",
+                   bytes, usec, bytes * 8. / usec);
+            printf("%d iters in %.2f micro seconds = %.2f usec/iter\n",
+                   iters, usec, usec / iters);
+            fflush(stdout);
         }
+        // TODO: should we do a specialized "end" message ?
         printf("Client Done.\n");
-    } else { // server code
-        if (pp_post_send(ctx)) {
-            fprintf(stderr, "Server couldn't post send\n");
-            return 1;
+        else { // server code
+
+//            for (int k = 0; k < iters ; k++) { // wait for all sended messages
+//                if ((i != 0) && (i % 1 == 0)) {
+            pp_wait_completions(ctx, iters);
+//                  }
+
+            if (pp_post_send(ctx, ourSize)) {
+                fprintf(stderr, "Server couldn't post send\n");
+                return 1;
+            }
+
+            pp_wait_completions(ctx, 1);
+            printf("Server Done.\n");
         }
-        pp_wait_completions(ctx, iters);
-        printf("Server Done.\n");
+
+        ourSize *= 2;
     }
 
     ibv_free_device_list(dev_list);
     free(rem_dest);
     return 0;
 }
-
-
-// blabla testssadfasdfasdfasdfsdf Mor
