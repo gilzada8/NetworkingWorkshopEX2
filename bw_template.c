@@ -484,7 +484,7 @@ static struct pingpong_context *pp_init_ctx(struct ibv_device *ib_dev, int size,
         }
     }
 
-//    return ctx;
+    return ctx;
 }
 
 int pp_close_ctx(struct pingpong_context *ctx) {
@@ -778,11 +778,12 @@ int main(int argc, char *argv[]) {
     ctx = pp_init_ctx(ib_dev, size, rx_depth, tx_depth, ib_port, use_event, !servername);
     if (!ctx)
         return 1;
-
-    ctx->routs = pp_post_recv(ctx, ctx->rx_depth, MAX_SIZE); // changed to MAX_SIZE
-    if (ctx->routs < ctx->rx_depth) {
-        fprintf(stderr, "Couldn't post receive (%d)\n", ctx->routs);
-        return 1;
+    if (!servername){
+        ctx->routs = pp_post_recv(ctx, ctx->rx_depth, MAX_SIZE); // changed to MAX_SIZE
+        if (ctx->routs < ctx->rx_depth) {
+            fprintf(stderr, "Couldn't post receive (%d)\n", ctx->routs);
+            return 1;
+        }
     }
 
     if (use_event)
@@ -862,7 +863,10 @@ int main(int argc, char *argv[]) {
             // TODO: what happens if tx_depth is bigger then iters ?
             for (i = 0; i < iters - tx_depth; i++) { // wait for 1 and send 1
 //                if ((i != 0) && (i % 1 == 0)) {
-                pp_wait_completions(ctx, 1);
+                if (pp_wait_completions(ctx, 1)){
+                    fprintf(stderr, "Error on pp_wait_completion \n");
+                    return 1;
+                }
 //                }
                 if (pp_post_send(ctx, ourSize)) { //send
                     fprintf(stderr, "Client couldn't post send\n");
@@ -871,7 +875,10 @@ int main(int argc, char *argv[]) {
             }
             // get message from server that says : "ended current iter j"
             pp_post_recv(ctx, 1, MAX_SIZE); //added MAX_SIZE ?
-            pp_wait_completions(ctx, 1);
+            if (pp_wait_completions(ctx, 1)){
+                fprintf(stderr, "Error on pp_wait_completion \n");
+                return 1;
+            }
 
             // close timer
             if (gettimeofday(&end, NULL)) {
@@ -886,13 +893,16 @@ int main(int argc, char *argv[]) {
             printf("%d iters in %.2f micro seconds = %.2f usec/iter\n",
                    iters, usec, usec / iters);
             fflush(stdout);
-	    printf("Client Done.\n");
+	    printf("Client Done iter %d.\n", j);
         }
         else { // server code
 
 //            for (int k = 0; k < iters ; k++) { // wait for all sended messages
 //                if ((i != 0) && (i % 1 == 0)) {
-            pp_wait_completions(ctx, iters);
+            if (pp_wait_completions(ctx, iters)){
+                fprintf(stderr, "Error on pp_wait_completion \n");
+                return 1;
+            }
 //                  }
 
             if (pp_post_send(ctx, ourSize)) {
@@ -900,7 +910,10 @@ int main(int argc, char *argv[]) {
                 return 1;
             }
 
-            pp_wait_completions(ctx, 1);
+            if (pp_wait_completions(ctx, 1)){
+                fprintf(stderr, "Error on pp_wait_completion \n");
+                return 1;
+            }
             printf("Server Done.\n");
         }
 
