@@ -572,9 +572,13 @@ static int pp_post_send(struct pingpong_context *ctx, int ourSize) { //added int
 int pp_wait_completions(struct pingpong_context *ctx, int iters) {
     int rcnt = 0, scnt = 0;
     while (rcnt + scnt < iters) {
+        printf("%d rcnt\n", rcnt);
+        printf("%d scnt\n", scnt);
+        printf("%d iters\n", iters);
+        fflush(stdout);
         struct ibv_wc wc[WC_BATCH];
         int ne, i;
-
+        //stuck here
         do {
             ne = ibv_poll_cq(ctx->cq, WC_BATCH, wc);
             if (ne < 0) {
@@ -775,16 +779,18 @@ int main(int argc, char *argv[]) {
     }
     /// interesting part
     // init context - save all relevant params
-    ctx = pp_init_ctx(ib_dev, size, rx_depth, tx_depth, ib_port, use_event, !servername);
+    ctx = pp_init_ctx(ib_dev, MAX_SIZE, rx_depth, tx_depth, ib_port, use_event, !servername); //changed size to MAX_SIZE
     if (!ctx)
         return 1;
-    if (!servername){
-        ctx->routs = pp_post_recv(ctx, ctx->rx_depth, MAX_SIZE); // changed to MAX_SIZE
-        if (ctx->routs < ctx->rx_depth) {
-            fprintf(stderr, "Couldn't post receive (%d)\n", ctx->routs);
-            return 1;
-        }
+
+
+//    if (!servername){
+    ctx->routs = pp_post_recv(ctx, ctx->rx_depth, MAX_SIZE); // changed to MAX_SIZE
+    if (ctx->routs < ctx->rx_depth) {
+        fprintf(stderr, "Couldn't post receive (%d)\n", ctx->routs);
+        return 1;
     }
+    //}
 
     if (use_event)
         if (ibv_req_notify_cq(ctx->cq, 0)) {
@@ -841,7 +847,6 @@ int main(int argc, char *argv[]) {
     //3. test (on same buffer)
     int ourSize = 1;
 
-
     for (int j = 0; j < 21; j++) {
         if (servername) { //client code
 
@@ -850,35 +855,43 @@ int main(int argc, char *argv[]) {
             struct timeval start, end;
             if (gettimeofday(&start, NULL)) {
                 perror("gettimeofday");
-                return 1;
-            }
+                return 1;}
 
             int i;
             for (i = 0; i < tx_depth; i++) { // send first tx_depth messages
-                if (pp_post_send(ctx, ourSize)) { //send
+                if (pp_post_send(ctx, ourSize)) {
                     fprintf(stderr, "Client couldn't post send\n");
-                    return 1;
-                }
+                    return 1;}
             }
+
             // TODO: what happens if tx_depth is bigger then iters ?
             for (i = 0; i < iters - tx_depth; i++) { // wait for 1 and send 1
 //                if ((i != 0) && (i % 1 == 0)) {
                 if (pp_wait_completions(ctx, 1)){
                     fprintf(stderr, "Error on pp_wait_completion \n");
-                    return 1;
-                }
-//                }
+                    return 1;}
+
+
                 if (pp_post_send(ctx, ourSize)) { //send
                     fprintf(stderr, "Client couldn't post send\n");
-                    return 1;
-                }
+                    return 1;}
             }
-            // get message from server that says : "ended current iter j"
-            pp_post_recv(ctx, 1, MAX_SIZE); //added MAX_SIZE ?
-            if (pp_wait_completions(ctx, 1)){
+
+
+            //Mor's suggestion
+            //stuck here
+            if (pp_wait_completions(ctx, tx_depth + 1)){ //the +1 is for the server response - said that he received all the message
                 fprintf(stderr, "Error on pp_wait_completion \n");
-                return 1;
-            }
+                return 1;}
+
+
+            // get message from server that says : "ended current iter j"
+
+            // pp_post_recv(ctx, 1, MAX_SIZE); //added MAX_SIZE ?
+//            if (pp_wait_completions(ctx, 1)){ //server response - said that he received all the message
+//                fprintf(stderr, "Error on pp_wait_completion \n");
+//                return 1;
+//            }
 
             // close timer
             if (gettimeofday(&end, NULL)) {
@@ -910,13 +923,12 @@ int main(int argc, char *argv[]) {
                 return 1;
             }
 
-            if (pp_wait_completions(ctx, 1)){
+            if (pp_wait_completions(ctx, 1)){ // client received my (server) response
                 fprintf(stderr, "Error on pp_wait_completion \n");
                 return 1;
             }
             printf("Server Done.\n");
         }
-
         ourSize *= 2;
     }
 
