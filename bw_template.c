@@ -571,10 +571,10 @@ static int pp_post_send(struct pingpong_context *ctx, int ourSize) { //added int
 
 int pp_wait_completions(struct pingpong_context *ctx, int iters) {
     int rcnt = 0, scnt = 0;
+//    printf("rcnt: %d\n", rcnt);
+//    printf("scnt: %d\n", scnt);
+//    printf("iters: %d\n", iters);
     while (rcnt + scnt < iters) {
-        printf("%d rcnt\n", rcnt);
-        printf("%d scnt\n", scnt);
-        printf("%d iters\n", iters);
         fflush(stdout);
         struct ibv_wc wc[WC_BATCH];
         int ne, i;
@@ -622,7 +622,7 @@ int pp_wait_completions(struct pingpong_context *ctx, int iters) {
         }
 
     }
-    return 0;
+    return rcnt + scnt;
 }
 
 static void usage(const char *argv0) {
@@ -846,8 +846,11 @@ int main(int argc, char *argv[]) {
     //2. warmup
     //3. test (on same buffer)
     int ourSize = 1;
+    int compCount = 0;
+    int currCount = 0;
 
     for (int j = 0; j < 21; j++) {
+        compCount = 0;
         if (servername) { //client code
 
 
@@ -859,39 +862,35 @@ int main(int argc, char *argv[]) {
 
             int i;
             for (i = 0; i < tx_depth; i++) { // send first tx_depth messages
-                if (pp_post_send(ctx, ourSize)) {
+                if (pp_post_send(ctx, ourSize)) {  //// + 100
                     fprintf(stderr, "Client couldn't post send\n");
                     return 1;}
             }
 
             // TODO: what happens if tx_depth is bigger then iters ?
-            for (i = 0; i < iters - tx_depth; i++) { // wait for 1 and send 1
-//                if ((i != 0) && (i % 1 == 0)) {
-                if (pp_wait_completions(ctx, 1)){
-                    fprintf(stderr, "Error on pp_wait_completion \n");
-                    return 1;}
+            while (i < iters) { // wait for 10 and send 10
 
-
-                if (pp_post_send(ctx, ourSize)) { //send
-                    fprintf(stderr, "Client couldn't post send\n");
-                    return 1;}
+//                printf("starting 10 wait completion, compCount = %d\n", compCount);
+                currCount = pp_wait_completions(ctx, WC_BATCH); // WC_BATCH = 10  /// -10
+                compCount += currCount;
+//                printf("finished 10 wait completion, compCount = %d\n", compCount);
+//                printf("starting 10 post sends, i = %d\n", i);
+                for (int k = 0; k < currCount; k++) { // send first tx_depth messages
+                    if (i < iters) {
+                        if (pp_post_send(ctx, ourSize)) {      ///// +10
+                            fprintf(stderr, "Client couldn't post send\n");
+                            return 1;
+                        }
+                        i++;
+                    }
+                }
             }
-
-
-            //Mor's suggestion
+//            printf("comp count = %d\n", compCount);
             //stuck here
-            if (pp_wait_completions(ctx, tx_depth + 1)){ //the +1 is for the server response - said that he received all the message
-                fprintf(stderr, "Error on pp_wait_completion \n");
-                return 1;}
+//            printf("got here , i = %d\n", i);
+            compCount += pp_wait_completions(ctx, iters - compCount + 1);
 
-
-            // get message from server that says : "ended current iter j"
-
-            // pp_post_recv(ctx, 1, MAX_SIZE); //added MAX_SIZE ?
-//            if (pp_wait_completions(ctx, 1)){ //server response - said that he received all the message
-//                fprintf(stderr, "Error on pp_wait_completion \n");
-//                return 1;
-//            }
+//            printf("comp count = %d\n", compCount);
 
             // close timer
             if (gettimeofday(&end, NULL)) {
@@ -901,32 +900,34 @@ int main(int argc, char *argv[]) {
 
             float usec = (end.tv_sec - start.tv_sec) * 1000000 + (end.tv_usec - start.tv_usec);
             long long bytes = (long long) ourSize * iters * 2;
-            printf("%lld bytes in %.2f micro seconds = %.2f Mbit/sec\n",
-                   bytes, usec, bytes * 8. / usec);
-            printf("%d iters in %.2f micro seconds = %.2f usec/iter\n",
-                   iters, usec, usec / iters);
+//            printf("%lld bytes in %.2f micro seconds = %.2f Mbit/sec\n",
+//                   bytes, usec, bytes * 8. / usec);
+//            printf("%d iters in %.2f micro seconds = %.2f usec/iter\n",
+//                   iters, usec, usec / iters);
+
+            printf("%d\t%f\tMbps\n", ourSize, bytes * 8. / usec);
+
             fflush(stdout);
-	    printf("Client Done iter %d.\n", j);
+//	    printf("Client Done iter %d.\n", j);
         }
         else { // server code
 
-//            for (int k = 0; k < iters ; k++) { // wait for all sended messages
-//                if ((i != 0) && (i % 1 == 0)) {
-            if (pp_wait_completions(ctx, iters)){
-                fprintf(stderr, "Error on pp_wait_completion \n");
-                return 1;
-            }
-//                  }
+
+            pp_wait_completions(ctx, iters);
+
 
             if (pp_post_send(ctx, ourSize)) {
                 fprintf(stderr, "Server couldn't post send\n");
                 return 1;
             }
 
-            if (pp_wait_completions(ctx, 1)){ // client received my (server) response
-                fprintf(stderr, "Error on pp_wait_completion \n");
-                return 1;
-            }
+
+            pp_wait_completions(ctx, 1);
+
+//            if (pp_wait_completions(ctx, 1)){ // client received my (server) response
+//                fprintf(stderr, "Error on pp_wait_completion \n");
+//                return 1;
+//            }
             printf("Server Done.\n");
         }
         ourSize *= 2;
