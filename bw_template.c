@@ -45,6 +45,8 @@
 #include <arpa/inet.h>
 #include <netdb.h>
 #include <time.h>
+#include <math.h>
+
 
 #include <infiniband/verbs.h>
 
@@ -57,6 +59,11 @@ enum {
 };
 
 int MAX_SIZE = 1048576; // 2 ^ 20
+double MICRO_SEC = 1e6;
+int BYTE_TO_BIT = 8;
+int WARMUP_NUM_OF_SENDS = 555;
+double CONVERGE = 0.01;
+
 
 static int page_size;
 
@@ -133,7 +140,7 @@ void wire_gid_to_gid(const char *wgid, union ibv_gid *gid) {
     for (tmp[8] = 0, i = 0; i < 4; ++i) {
         memcpy(tmp, wgid + i * 8, 8);
         sscanf(tmp, "%x", &v32);
-        *(uint32_t * )(&gid->raw[i * 4]) = ntohl(v32);
+        *(uint32_t *) (&gid->raw[i * 4]) = ntohl(v32);
     }
 }
 
@@ -141,7 +148,7 @@ void gid_to_wire_gid(const union ibv_gid *gid, char wgid[]) {
     int i;
 
     for (i = 0; i < 4; ++i)
-        sprintf(&wgid[i * 8], "%08x", htonl(*(uint32_t * )(gid->raw + i * 4)));
+        sprintf(&wgid[i * 8], "%08x", htonl(*(uint32_t *) (gid->raw + i * 4)));
 }
 
 static int pp_connect_ctx(struct pingpong_context *ctx, int port, int my_psn,
@@ -526,7 +533,7 @@ int pp_close_ctx(struct pingpong_context *ctx) {
     return 0;
 }
 
-static int pp_post_recv(struct pingpong_context *ctx, int n, int ourSize) { //added int ourSize
+static int pp_post_recv(struct pingpong_context *ctx, int n, unsigned long ourSize) { //added unsigned long ourSize
     struct ibv_sge list = {
             .addr    = (uintptr_t) ctx->buf,
 //            .length = ctx->size,
@@ -549,7 +556,7 @@ static int pp_post_recv(struct pingpong_context *ctx, int n, int ourSize) { //ad
     return i;
 }
 
-static int pp_post_send(struct pingpong_context *ctx, int ourSize) { //added int ourSize
+static int pp_post_send(struct pingpong_context *ctx, unsigned long ourSize) { //added unsigned long ourSize
     struct ibv_sge list = {
             .addr    = (uint64_t) ctx->buf,
 //            .length = ctx->size,
@@ -643,6 +650,123 @@ static void usage(const char *argv0) {
     printf("  -g, --gid-idx=<gid index> local port gid index\n");
 }
 
+
+int serverGetMessages(struct pingpong_context *ctx, unsigned long ourSize, int iters) {
+    pp_wait_completions(ctx, iters);
+    if (pp_post_send(ctx, ourSize)) {
+        fprintf(stderr, "Server couldn't post send\n");
+        return 1;
+    }
+    pp_wait_completions(ctx, 1);
+    return 0;
+}
+
+
+__suseconds_t clientSendMessages(struct pingpong_context *ctx, int tx_depth, unsigned long ourSize, int iters) {
+    int compCount = 0;
+    int currCount = 0;
+
+    // open timer
+    struct timeval start, end;
+    if (gettimeofday(&start, NULL)) {
+        perror("gettimeofday");
+        return -1;
+    }
+
+    int i;
+    for (i = 0; i < tx_depth; i++) { // send first tx_depth messages
+        if (pp_post_send(ctx, ourSize)) {  //// + 100
+            fprintf(stderr, "Client couldn't post send\n");
+            return -1;
+        }
+    }
+
+    // TODO: what happens if tx_depth is bigger then iters ?
+    while (i < iters) { // wait for 10 and send 10
+
+        currCount = pp_wait_completions(ctx, WC_BATCH); // WC_BATCH = 10  /// -10
+        compCount += currCount;
+        for (int k = 0; k < currCount; k++) { // send first tx_depth messages
+            if (i < iters) {
+                if (pp_post_send(ctx, ourSize)) {      ///// +10
+                    fprintf(stderr, "Client couldn't post send\n");
+                    return 1;
+                }
+                i++;
+            }
+        }
+    }
+    pp_wait_completions(ctx, iters - compCount + 1);
+
+    // close timer
+
+    if (gettimeofday(&end, NULL)) {
+        perror("gettimeofday");
+        return -1;
+    }
+    __suseconds_t usec = (((end.tv_sec - start.tv_sec) * (__suseconds_t) MICRO_SEC +
+                           (end.tv_usec - start.tv_usec)));
+    return usec;
+}
+
+
+void simpleWarmUp(struct pingpong_context *ctx, int tx_depth, unsigned long ourSize, char *servername) {
+
+    if (servername) {
+        clientSendMessages(ctx, tx_depth, ourSize, WARMUP_NUM_OF_SENDS);
+    } else {
+        serverGetMessages(ctx, ourSize, WARMUP_NUM_OF_SENDS);
+    }
+}
+
+
+/**
+ * Do warm-up cycles - send and receives multiple messages until the difference between two iterations' RTT is less
+ * than 1 percent.
+ *
+ * @param socket_fd file descriptor of socket between client and server
+ */
+void warmUp(struct pingpong_context *ctx, int tx_depth, unsigned long ourSize, char *servername) {
+    double firstTime = 0;
+    double secondTime = 0;
+    memset(ctx->buf, 0, MAX_SIZE);
+
+
+//    memset(ptr, 0, 100); // sizeof(ptr) == 4 or 8 (32-bit or 64-bit), so you can't use sizeof() here
+
+//    int* iptr = (int*) (ctx->buf); // We tell the compiler that the values at the end of the pointer should be interpreted as integers
+//    int a = iptr[0];
+
+    if (servername) { // client code
+        firstTime = (double) clientSendMessages(ctx, tx_depth, ourSize, WARMUP_NUM_OF_SENDS);
+        secondTime = (double) clientSendMessages(ctx, tx_depth, ourSize, WARMUP_NUM_OF_SENDS);
+
+
+    } else { // server code
+        serverGetMessages(ctx, ourSize, WARMUP_NUM_OF_SENDS);
+        serverGetMessages(ctx, ourSize, WARMUP_NUM_OF_SENDS);
+    }
+
+    if (servername) {
+        while (fabs(firstTime - secondTime) > CONVERGE * firstTime) {
+            firstTime = secondTime;
+            secondTime = (double) clientSendMessages(ctx, tx_depth, ourSize, WARMUP_NUM_OF_SENDS);
+        }
+        memset(ctx->buf, 1, MAX_SIZE);
+        pp_post_send(ctx, 1);
+        memset(ctx->buf, 0, MAX_SIZE);
+        pp_wait_completions(ctx, 1);
+    } else {
+        while ((*(int *) ctx->buf) == 0) {
+            serverGetMessages(ctx, ourSize, WARMUP_NUM_OF_SENDS);
+        }
+        printf("server got out from while");
+        pp_wait_completions(ctx, 1);
+
+    }
+}
+
+
 int main(int argc, char *argv[]) {
     struct ibv_device **dev_list;
     struct ibv_device *ib_dev;
@@ -651,12 +775,12 @@ int main(int argc, char *argv[]) {
     struct pingpong_dest *rem_dest;
     char *ib_devname = NULL;
     char *servername = NULL;
-    int port = 12345;
+    int port = 12327;
     int ib_port = 1;
     enum ibv_mtu mtu = IBV_MTU_2048;
     int rx_depth = 100;
     int tx_depth = 100;
-    int iters = 1000;
+    int iters = 5555;
     int use_event = 0;
     int size = 1;
     int sl = 0;
@@ -845,90 +969,30 @@ int main(int argc, char *argv[]) {
     //1. init buffer + memset
     //2. warmup
     //3. test (on same buffer)
-    int ourSize = 1;
-    int compCount = 0;
-    int currCount = 0;
+    unsigned long ourSize = 1;
+    long long usec;
 
     for (int j = 0; j < 21; j++) {
-        compCount = 0;
+
+//        warmUp(ctx, tx_depth, ourSize, servername);
+        simpleWarmUp(ctx, tx_depth, ourSize, servername);
         if (servername) { //client code
 
 
-            // open timer
-            struct timeval start, end;
-            if (gettimeofday(&start, NULL)) {
-                perror("gettimeofday");
-                return 1;}
-
-            int i;
-            for (i = 0; i < tx_depth; i++) { // send first tx_depth messages
-                if (pp_post_send(ctx, ourSize)) {  //// + 100
-                    fprintf(stderr, "Client couldn't post send\n");
-                    return 1;}
+            usec = clientSendMessages(ctx, tx_depth, ourSize, iters);
+            printf("usec value: %lld\n", usec);
+            unsigned long total_bit = ourSize * iters * BYTE_TO_BIT;
+            printf("total bit value: %lu\n", total_bit);
+            unsigned long throughput = total_bit / usec;
+            if (usec < 0) {
+                printf("Error in client send message func");
             }
 
-            // TODO: what happens if tx_depth is bigger then iters ?
-            while (i < iters) { // wait for 10 and send 10
-
-//                printf("starting 10 wait completion, compCount = %d\n", compCount);
-                currCount = pp_wait_completions(ctx, WC_BATCH); // WC_BATCH = 10  /// -10
-                compCount += currCount;
-//                printf("finished 10 wait completion, compCount = %d\n", compCount);
-//                printf("starting 10 post sends, i = %d\n", i);
-                for (int k = 0; k < currCount; k++) { // send first tx_depth messages
-                    if (i < iters) {
-                        if (pp_post_send(ctx, ourSize)) {      ///// +10
-                            fprintf(stderr, "Client couldn't post send\n");
-                            return 1;
-                        }
-                        i++;
-                    }
-                }
-            }
-//            printf("comp count = %d\n", compCount);
-            //stuck here
-//            printf("got here , i = %d\n", i);
-            compCount += pp_wait_completions(ctx, iters - compCount + 1);
-
-//            printf("comp count = %d\n", compCount);
-
-            // close timer
-            if (gettimeofday(&end, NULL)) {
-                perror("gettimeofday");
-                return 1;
-            }
-
-            float usec = (end.tv_sec - start.tv_sec) * 1000000 + (end.tv_usec - start.tv_usec);
-            long long bytes = (long long) ourSize * iters * 2;
-//            printf("%lld bytes in %.2f micro seconds = %.2f Mbit/sec\n",
-//                   bytes, usec, bytes * 8. / usec);
-//            printf("%d iters in %.2f micro seconds = %.2f usec/iter\n",
-//                   iters, usec, usec / iters);
-
-            printf("%d\t%f\tMbps\n", ourSize, bytes * 8. / usec);
-
+            printf("%lu\t%lu\tMbps\n", ourSize, throughput);
             fflush(stdout);
-//	    printf("Client Done iter %d.\n", j);
-        }
-        else { // server code
+        } else { // server code
 
-
-            pp_wait_completions(ctx, iters);
-
-
-            if (pp_post_send(ctx, ourSize)) {
-                fprintf(stderr, "Server couldn't post send\n");
-                return 1;
-            }
-
-
-            pp_wait_completions(ctx, 1);
-
-//            if (pp_wait_completions(ctx, 1)){ // client received my (server) response
-//                fprintf(stderr, "Error on pp_wait_completion \n");
-//                return 1;
-//            }
-            printf("Server Done.\n");
+            serverGetMessages(ctx, ourSize, iters);
         }
         ourSize *= 2;
     }
