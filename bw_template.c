@@ -50,7 +50,7 @@
 
 #include <infiniband/verbs.h>
 
-#define WC_BATCH (10)
+#define WC_BATCH (25)
 #define _GNU_SOURCE
 
 enum {
@@ -61,7 +61,7 @@ enum {
 int MAX_SIZE = 1048576; // 2 ^ 20
 double MICRO_SEC = 1e6;
 int BYTE_TO_BIT = 8;
-int WARMUP_NUM_OF_SENDS = 555;
+int WARMUP_NUM_OF_SENDS = 5000;
 double CONVERGE = 0.01;
 
 
@@ -903,7 +903,8 @@ int main(int argc, char *argv[]) {
     }
     /// interesting part
     // init context - save all relevant params
-    ctx = pp_init_ctx(ib_dev, MAX_SIZE, rx_depth, tx_depth, ib_port, use_event, !servername); //changed size to MAX_SIZE
+    ctx = pp_init_ctx(ib_dev, MAX_SIZE, rx_depth, tx_depth, ib_port, use_event,
+                      !servername); //changed size to MAX_SIZE
     if (!ctx)
         return 1;
 
@@ -980,9 +981,9 @@ int main(int argc, char *argv[]) {
 
 
             usec = clientSendMessages(ctx, tx_depth, ourSize, iters);
-            printf("usec value: %lld\n", usec);
+//            printf("usec value: %lld\n", usec);
             unsigned long total_bit = ourSize * iters * BYTE_TO_BIT;
-            printf("total bit value: %lu\n", total_bit);
+//            printf("total bit value: %lu\n", total_bit);
             unsigned long throughput = total_bit / usec;
             if (usec < 0) {
                 printf("Error in client send message func");
@@ -993,6 +994,8 @@ int main(int argc, char *argv[]) {
         } else { // server code
 
             serverGetMessages(ctx, ourSize, iters);
+//            printf("finished iter %d", j);
+//            fflush(stdout);
         }
         ourSize *= 2;
     }
