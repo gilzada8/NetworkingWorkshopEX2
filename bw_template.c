@@ -50,7 +50,7 @@
 
 #include <infiniband/verbs.h>
 
-#define WC_BATCH (25)
+#define WC_BATCH (10)
 #define _GNU_SOURCE
 
 enum {
@@ -673,8 +673,8 @@ __suseconds_t clientSendMessages(struct pingpong_context *ctx, int tx_depth, uns
         return -1;
     }
 
-    int i;
-    for (i = 0; i < tx_depth; i++) { // send first tx_depth messages
+    int i=0;
+    for (i = 0; i < WC_BATCH; i++) { // send first tx_depth messages
         if (pp_post_send(ctx, ourSize)) {  //// + 100
             fprintf(stderr, "Client couldn't post send\n");
             return -1;
