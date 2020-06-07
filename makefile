@@ -1,10 +1,10 @@
-all: client server bw_template.c
+all: project
 
-template: play_bw_template.c
-    gcc bw_template.c -libverbs -o server && ln -s server client
-    
+project: bw_template.c
+	gcc bw_template.c -libverbs -o server && ln -sf server client
+
 tar:
-	tar -cvzf 315441683_206120537_204910681.tgz client.c server.c shared.h makefile client server
+	tar -cvzf 315441683_206120537_204910681.tgz bw_template.c makefile client server
 
 clean:
 	rm -f client server

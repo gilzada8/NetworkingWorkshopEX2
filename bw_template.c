@@ -67,19 +67,6 @@ double CONVERGE = 0.01;
 
 static int page_size;
 
-//struct pingpong_context {
-//    struct ibv_context	*context;
-//    struct ibv_comp_channel *channel;
-//    struct ibv_pd		*pd;
-//    struct ibv_mr		*mr;
-//    struct ibv_cq		*cq;
-//    struct ibv_qp		*qp;
-//    void			*buf;
-//    int			 size;
-//    int			 rx_depth;
-//    int			 pending;
-//    struct ibv_port_attr     portinfo;
-//};
 struct pingpong_context {
     struct ibv_context *context;
     struct ibv_comp_channel *channel;
@@ -578,14 +565,10 @@ static int pp_post_send(struct pingpong_context *ctx, unsigned long ourSize) { /
 
 int pp_wait_completions(struct pingpong_context *ctx, int iters) {
     int rcnt = 0, scnt = 0;
-//    printf("rcnt: %d\n", rcnt);
-//    printf("scnt: %d\n", scnt);
-//    printf("iters: %d\n", iters);
     while (rcnt + scnt < iters) {
         fflush(stdout);
         struct ibv_wc wc[WC_BATCH];
         int ne, i;
-        //stuck here
         do {
             ne = ibv_poll_cq(ctx->cq, WC_BATCH, wc);
             if (ne < 0) {
@@ -681,7 +664,6 @@ __suseconds_t clientSendMessages(struct pingpong_context *ctx, int tx_depth, uns
         }
     }
 
-    // TODO: what happens if tx_depth is bigger then iters ?
     while (i < iters) { // wait for 10 and send 10
 
         currCount = pp_wait_completions(ctx, WC_BATCH); // WC_BATCH = 10  /// -10
@@ -730,12 +712,6 @@ void warmUp(struct pingpong_context *ctx, int tx_depth, unsigned long ourSize, c
     double firstTime = 0;
     double secondTime = 0;
     memset(ctx->buf, 0, MAX_SIZE);
-
-
-//    memset(ptr, 0, 100); // sizeof(ptr) == 4 or 8 (32-bit or 64-bit), so you can't use sizeof() here
-
-//    int* iptr = (int*) (ctx->buf); // We tell the compiler that the values at the end of the pointer should be interpreted as integers
-//    int a = iptr[0];
 
     if (servername) { // client code
         firstTime = (double) clientSendMessages(ctx, tx_depth, ourSize, WARMUP_NUM_OF_SENDS);
@@ -909,13 +885,11 @@ int main(int argc, char *argv[]) {
         return 1;
 
 
-//    if (!servername){
     ctx->routs = pp_post_recv(ctx, ctx->rx_depth, MAX_SIZE); // changed to MAX_SIZE
     if (ctx->routs < ctx->rx_depth) {
         fprintf(stderr, "Couldn't post receive (%d)\n", ctx->routs);
         return 1;
     }
-    //}
 
     if (use_event)
         if (ibv_req_notify_cq(ctx->cq, 0)) {
@@ -994,8 +968,6 @@ int main(int argc, char *argv[]) {
         } else { // server code
 
             serverGetMessages(ctx, ourSize, iters);
-//            printf("finished iter %d", j);
-//            fflush(stdout);
         }
         ourSize *= 2;
     }
